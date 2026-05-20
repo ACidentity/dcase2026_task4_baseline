@@ -209,51 +209,75 @@ class DatasetS3(torch.utils.data.Dataset):
         valid_indices = np.where(valid_mask)[0]
 
         return all_pos[random.choice(valid_indices)]
+    def _inject_fake_label(self, labels, fg_events, wlen):
+        """
+        fake_label
+        """
+        try:
+            all_labels = set(self.labels)
+            existing = set(labels)
+            absent = list(all_labels - existing)
+            
+            if not absent:
+                return labels, fg_events
+
+            fake_label = random.choice(absent)
+            insert_pos = random.randint(0, len(labels))
+            labels.insert(insert_pos, fake_label)
+            dtype = fg_events[0]['waveform_dry'].dtype if fg_events else np.float32
+            
+            fake_event = {
+                'metadata': {'label': fake_label},
+                'waveform_dry': np.zeros((1, wlen), dtype=dtype)
+            }
+            fg_events.insert(insert_pos, fake_event)
+            
+            return labels, fg_events
+        except Exception as e:
+            print(f"[ERROR] _inject_fake_label failed: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            return labels, fg_events
+    
     def _generate(self, s3):
         output = s3.synthesize(fg_return=self.fg_return,
                                int_return=self.config.get('int_return', {}),
                                bg_return=self.config.get('bg_return', {}),)
-        mixture = output['mixture'] # [nchan, wlen]
-
+        mixture = output['mixture']
+    
         if self.shuffle_label:
             random.shuffle(output['fg_events'])
-
-        label = [fge['metadata']['label'] for fge in output['fg_events']];
+    
+        label = [fge['metadata']['label'] for fge in output['fg_events']]
         
-        # ========== fake_label ==========
-        if self.fake_label_prob > 0 and random.random() < self.fake_label_prob:
-            all_labels = set(self.labels)
-            existing = set(label)
-            absent = list(all_labels - existing)
-            if absent:
-                fake_label = random.choice(absent)
-                insert_pos = random.randint(0, len(label))
-                label.insert(insert_pos, fake_label)
-                fake_event = {
-                    'metadata': {'label': fake_label},
-                    'waveform_dry': np.zeros((1, mixture.shape[-1]), dtype=mixture.dtype)
-                }
-                output['fg_events'].insert(insert_pos, fake_event)
-        # ====================================
+        if self.fake_label_prob > 0 and random.random() < self.fake_label_prob and len(label) < self.n_sources:
+            label, output['fg_events'] = self._inject_fake_label(label, output['fg_events'], mixture.shape[-1])
         
         npad = self.n_sources - len(output['fg_events'])
-        if npad > 0: label.extend(['silence'] * npad) # add silence to get n_sources
+        if npad > 0: 
+            label.extend(['silence'] * npad)
+            for _ in range(npad):
+                output['fg_events'].append({
+                    'metadata': {'label': 'silence'},
+                    'waveform_dry': np.zeros((1, mixture.shape[-1]), dtype=mixture.dtype)
+                })
+        
         return_obj = {
-            'mixture': torch.from_numpy(mixture).to(torch.float32), # nchan, wlen
-            'label': label, # [lb1, lb2,...]
+            'mixture': torch.from_numpy(mixture).to(torch.float32),
+            'label': label,
             'label_vector': self._get_label_vector(label),
         }
-
+    
         if self.return_source:
-            source = [fge['waveform_dry'] for fge in output['fg_events']];
-            if npad > 0:
-                source.extend([np.zeros((1, mixture.shape[-1]), dtype=mixture.dtype) for _ in range(npad)])
-            assert len(return_obj['label']) == len(source)
-
-            return_obj['dry_sources'] = torch.from_numpy(np.stack(source)) # nsources, 1ch, wlen
-        if self.return_meta: return_obj['metadata'] = output
-
+            source = [fge['waveform_dry'] for fge in output['fg_events']]
+            assert len(source) == self.n_sources
+            return_obj['dry_sources'] = torch.from_numpy(np.stack(source))
+        
+        if self.return_meta: 
+            return_obj['metadata'] = output
+    
         return return_obj
+
 
 
     def _get_item_generate(self, idx):
