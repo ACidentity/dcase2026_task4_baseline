@@ -29,6 +29,7 @@ class DatasetS3(torch.utils.data.Dataset):
                  silence_label_mode='zeros', # zero, onehot
                  return_meta=None, # return all the wet source, dry source, ir from spatial scaper
                  return_source=True, # if false, only return mixture and label
+                 fake_label_prob=0.0,  # (new)
                 ):
         super().__init__()
         self.return_meta = return_meta
@@ -39,6 +40,7 @@ class DatasetS3(torch.utils.data.Dataset):
         self.label_vector_mode = label_vector_mode
         self.silence_label_mode = silence_label_mode
         self.labels = LABELS[self.label_set].copy()
+        self.fake_label_prob = fake_label_prob  # (new)
 
         if self.config['mode']== 'waveform':
             self.soundscape_dir = self.config['soundscape_dir']
@@ -217,6 +219,23 @@ class DatasetS3(torch.utils.data.Dataset):
             random.shuffle(output['fg_events'])
 
         label = [fge['metadata']['label'] for fge in output['fg_events']];
+        
+        # ========== fake_label ==========
+        if self.fake_label_prob > 0 and random.random() < self.fake_label_prob:
+            all_labels = set(self.labels)
+            existing = set(label)
+            absent = list(all_labels - existing)
+            if absent:
+                fake_label = random.choice(absent)
+                insert_pos = random.randint(0, len(label))
+                label.insert(insert_pos, fake_label)
+                fake_event = {
+                    'metadata': {'label': fake_label},
+                    'waveform_dry': np.zeros((1, mixture.shape[-1]), dtype=mixture.dtype)
+                }
+                output['fg_events'].insert(insert_pos, fake_event)
+        # ====================================
+        
         npad = self.n_sources - len(output['fg_events'])
         if npad > 0: label.extend(['silence'] * npad) # add silence to get n_sources
         return_obj = {
