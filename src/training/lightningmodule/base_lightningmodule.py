@@ -88,24 +88,64 @@ class BaseLightningModule(pl.LightningModule, PyTorchModelHubMixin):
 
 
     def validation_step_processing(self, batch_data_dict, batch_idx):
-        raise NotImplementedError
         batchsize = batch_data_dict['mixture'].shape[0]
-
+    
         input_dict = {
-            'mixture': batch_data_dict['mixture'], # [bs, nch, wlen]
-            'label_vector': batch_data_dict['label_vector'] # [bs, label_len]
-            }
-        output_dict = self.model(input_dict) # {'waveform': [bs, nch, wlen]}
-        target_dict = {'waveform': batch_data_dict['ground_truth']}
+            'mixture': batch_data_dict['mixture'],
+            'label_vector': batch_data_dict['label_vector']
+        }
+        
+        # ── DEBUG: 对比 eval/train 模式 ──────────────────────────────
+        if batch_idx < 3:
+            # eval 模式输出
+            output_dict_eval = self.model(input_dict)
+            pred_power_eval = output_dict_eval['waveform'].pow(2).mean().item()
+            target_power = batch_data_dict['dry_sources'].pow(2).mean().item()
+            
+            print(f"\n{'='*60}", flush=True)
+            print(f"[BATCH {batch_idx}] model.training = {self.model.training}", flush=True)
+            print(f"[BATCH {batch_idx}] pred power (eval)  = {pred_power_eval:.10e}", flush=True)
+            print(f"[BATCH {batch_idx}] target power       = {target_power:.10e}", flush=True)
+            
+            # 切换到 train 模式测试
+            self.model.train()
+            with torch.no_grad():
+                output_dict_train = self.model(input_dict)
+            pred_power_train = output_dict_train['waveform'].pow(2).mean().item()
+            print(f"[BATCH {batch_idx}] pred power (train) = {pred_power_train:.10e}", flush=True)
+            
+            # 切回 eval 模式
+            self.model.eval()
+            print(f"{'='*60}\n", flush=True)
+            
+            # 使用 eval 模式的输出继续
+            output_dict = output_dict_eval
+        else:
+            output_dict = self.model(input_dict)
+        # ── END DEBUG ──────────────────────────────────────────────────
+    
+        copylb = batch_data_dict['label_vector'].clone()
+        if copylb.dim() == 3:
+            assert copylb.shape[:2] == output_dict['waveform'].shape[:2]
+        elif copylb.dim() == 2:
+            assert copylb.shape[1] % output_dict['waveform'].shape[1] == 0
+            copylb = copylb.view(
+                copylb.shape[0],
+                output_dict['waveform'].shape[1],
+                copylb.shape[1] // output_dict['waveform'].shape[1])
+        target_dict = {'waveform': batch_data_dict['dry_sources'],
+                       'label_vector': copylb
+                       }
         loss_dict = self.loss_func(output_dict, target_dict)
-
+    
         loss_dict = {k: v.item() for k,v in loss_dict.items()}
-        if self.metric_func: # add metrics
+        if self.metric_func:
             metric = self.metric_func(output_dict, target_dict)
             for k,v in metric.items():
-                loss_dict[k] = v.mean().item() # torch tensor size [bs]
-
+                loss_dict[k] = v.mean().item()
+    
         return batchsize, loss_dict
+
 
     def _validation_step(self, batch_data_dict, batch_idx):
         self.model.eval()
