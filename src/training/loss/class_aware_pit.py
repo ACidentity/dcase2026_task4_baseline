@@ -35,8 +35,16 @@ def class_aware_permutation_invariant_training(
         # silence will not be permutated, and silence score will be 0
         metric_mtx.diagonal(dim1=1, dim2=2)[silence_mask.diagonal(dim1=1, dim2=2)] = 0
 
+        # ── Fake source check ─────────────────────────────────────────
+        target_power = (
+            waveform_target.float().pow(2)
+                          .flatten(start_dim=2)
+                          .mean(dim=2)
+        )  # [B, S]
+        is_fake = (target_power < 1e-10) & ~is_silence   # [B, S]
+
         same_label = (label.unsqueeze(2) == label.unsqueeze(1)).all(dim=3) # B, S, S
-        valid_mask = same_label & ~silence_mask # [B, S, S] only valid with same-label permutation, except silence
+        valid_mask = same_label & ~silence_mask & ~is_fake.unsqueeze(2) # [B, S, S] only valid with same-label permutation, except silence
 
         for i in range(S):
             for j in range(S):
@@ -45,6 +53,19 @@ def class_aware_permutation_invariant_training(
                     m = metric_func(waveform_pred[:, j, :], waveform_target[:, i, :])  # [B]
                     metric_mtx[valid, i, j] = m[valid].to(dtype=metric_mtx.dtype)
 
+        for i in range(S):
+            fake_b = is_fake[:, i]      # [B]
+            if not fake_b.any():
+                continue
+            pred_power_i = (
+                waveform_pred[fake_b, i].float()
+                                        .pow(2)
+                                        .flatten(start_dim=1)
+                                        .mean(dim=1)
+            )                           # [sum(fake_b)]
+            score = 10.0 * torch.log10(pred_power_i + 1e-10)   # dB scale
+            metric_mtx[fake_b, i, i] = score.double()
+        
         # Exhaustive search for best permutation
         perms = torch.tensor(list(permutations(range(S))), device=device)  # [P, S]
         P = perms.shape[0]
