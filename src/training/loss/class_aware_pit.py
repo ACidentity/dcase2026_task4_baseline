@@ -57,14 +57,21 @@ def class_aware_permutation_invariant_training(
             fake_b = is_fake[:, i]      # [B]
             if not fake_b.any():
                 continue
-            pred_power_i = (
-                waveform_pred[fake_b, i].float()
-                                        .pow(2)
-                                        .flatten(start_dim=1)
-                                        .mean(dim=1)
-            )                           # [sum(fake_b)]
-            score = 10.0 * torch.log10(pred_power_i + 1e-10)   # dB scale
+            
+            # 【修正点】: 使用 L1 损失，不要用 log10
+            # 我们希望模型预测全0，所以直接计算预测波形的绝对值平均 (L1 Loss)
+            # L1 Loss 的下界是 0，这就切断了模型通过"极度静音"刷负分奖励的捷径
+            pred_i = waveform_pred[fake_b, i]
+            l1_penalty = pred_i.abs().mean(dim=1)  # [sum(fake_b)]
+            
+            # 【权重调节】: 将 L1 映射到与 SNR 相近的惩罚尺度
+            # 假设波形最大振幅在 [-1, 1] 之间。如果模型瞎猜了一个均值 0.05 的噪音，
+            # l1_penalty = 0.05。乘以 200 就是 10 的正向惩罚。
+            # 这个正数会迫使模型必须在这个通道输出 0 来消除惩罚。
+            score = l1_penalty * 200.0  # 这里的 200.0 是超参数，可以根据实际实验微调
+            
             metric_mtx[fake_b, i, i] = score.double()
+
         
         # Exhaustive search for best permutation
         perms = torch.tensor(list(permutations(range(S))), device=device)  # [P, S]
