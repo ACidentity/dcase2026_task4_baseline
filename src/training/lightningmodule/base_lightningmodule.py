@@ -95,27 +95,6 @@ class BaseLightningModule(pl.LightningModule, PyTorchModelHubMixin):
             'mixture': batch_data_dict['mixture'], # [bs, nch, wlen]
             'label_vector': batch_data_dict['label_vector'] # [bs, label_len]
             }
-        # ── DEBUG: 对比 train/eval 模式 ──────────────────────────────
-        if batch_idx == 0:
-            print(f"\n{'='*60}", flush=True)
-            
-            # eval 模式（当前）
-            output_eval = self.model(input_dict)
-            print(f"[DEBUG] pred power (eval mode): {output_eval['waveform'].pow(2).mean().item():.6f}", flush=True)
-            
-            # 切到 train 模式测试
-            self.model.train()
-            with torch.no_grad():
-                output_train = self.model(input_dict)
-            print(f"[DEBUG] pred power (train mode): {output_train['waveform'].pow(2).mean().item():.6f}", flush=True)
-            
-            # 切回 eval
-            self.model.eval()
-            output_dict = output_eval  # 用 eval 的结果继续
-            print(f"{'='*60}\n", flush=True)
-        else:
-            output_dict = self.model(input_dict)
-        # ── END DEBUG ──────────────────────────────────────────────────
         output_dict = self.model(input_dict) # {'waveform': [bs, nch, wlen]}
         target_dict = {'waveform': batch_data_dict['ground_truth']}
         loss_dict = self.loss_func(output_dict, target_dict)
