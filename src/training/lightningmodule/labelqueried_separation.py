@@ -47,28 +47,6 @@ class LabelQueriedSeparationLightning(BaseLightningModule):
         target_dict = {'waveform': batch_data_dict['dry_sources'],
                        'label_vector': copylb
                        }
-        # ── DEBUG ──────────────────────────────────────────────────────
-        if batch_idx == 0:
-            print(f"\n{'='*60}", flush=True)
-            print(f"[DEBUG val] pred   power : {output_dict['waveform'].pow(2).mean().item():.6f}", flush=True)
-            print(f"[DEBUG val] target power : {target_dict['waveform'].pow(2).mean().item():.6f}", flush=True)
-            print(f"[DEBUG val] label sample : {batch_data_dict['label'][0]}", flush=True)
-            print(f"[DEBUG val] label_vector shape : {target_dict['label_vector'].shape}", flush=True)
-            print(f"[DEBUG val] label_vector sample:\n{target_dict['label_vector'][0]}", flush=True)
-    
-            # silence / fake 统计
-            is_silence = (target_dict['label_vector'] == 0).all(dim=2)   # [B, S]
-            target_power = target_dict['waveform'].float().pow(2).flatten(start_dim=2).mean(dim=2)  # [B, S]
-            is_fake = (target_power < 1e-10) & ~is_silence
-            print(f"[DEBUG val] is_silence per source : {is_silence.float().mean(dim=0).tolist()}", flush=True)
-            print(f"[DEBUG val] is_fake    per source : {is_fake.float().mean(dim=0).tolist()}", flush=True)
-            print(f"[DEBUG val] target_power per source : {target_power.mean(dim=0).tolist()}", flush=True)
-    
-            # loss 原始值
-            loss_dict_raw = self.loss_func(output_dict, target_dict)
-            print(f"[DEBUG val] raw loss : {loss_dict_raw['loss'].item():.6f}", flush=True)
-            print(f"{'='*60}\n", flush=True)
-        # ── END DEBUG ──────────────────────────────────────────────────
         loss_dict = self.loss_func(output_dict, target_dict)
 
         loss_dict = {k: v.item() for k,v in loss_dict.items()}
