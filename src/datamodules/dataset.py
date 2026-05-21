@@ -209,9 +209,10 @@ class DatasetS3(torch.utils.data.Dataset):
         valid_indices = np.where(valid_mask)[0]
 
         return all_pos[random.choice(valid_indices)]
+                          
     def _inject_fake_label(self, labels, fg_events, wlen):
         """
-        fake_label
+        Inject a fake label with zero waveform.
         """
         try:
             all_labels = set(self.labels)
@@ -220,14 +221,17 @@ class DatasetS3(torch.utils.data.Dataset):
             
             if not absent:
                 return labels, fg_events
-
+    
             fake_label = random.choice(absent)
             insert_pos = random.randint(0, len(labels))
             labels.insert(insert_pos, fake_label)
             dtype = fg_events[0]['waveform_dry'].dtype if fg_events else np.float32
             
             fake_event = {
-                'metadata': {'label': fake_label},
+                'metadata': {
+                    'label': fake_label,
+                    'is_fake': True  # 标记为 fake
+                },
                 'waveform_dry': np.zeros((1, wlen), dtype=dtype)
             }
             fg_events.insert(insert_pos, fake_event)
@@ -250,27 +254,10 @@ class DatasetS3(torch.utils.data.Dataset):
     
         label = [fge['metadata']['label'] for fge in output['fg_events']]
         
-        # ── DEBUG ──────────────────────────────────────────────────────
-        len_before = len(label)
-        # ── END DEBUG ──────────────────────────────────────────────────
-        
         if self.fake_label_prob > 0 and random.random() < self.fake_label_prob and len(label) < self.n_sources:
             label, output['fg_events'] = self._inject_fake_label(label, output['fg_events'], mixture.shape[-1])
-            
-            # ── DEBUG ──────────────────────────────────────────────────────
-            if len(label) != len(output['fg_events']):
-                print(f"[ERROR] length mismatch after inject: label={len(label)}, fg_events={len(output['fg_events'])}", flush=True)
-            if len(label) != len_before + 1:
-                print(f"[ERROR] inject did not add exactly 1: before={len_before}, after={len(label)}", flush=True)
-            # ── END DEBUG ──────────────────────────────────────────────────
         
         npad = self.n_sources - len(output['fg_events'])
-        
-        # ── DEBUG ──────────────────────────────────────────────────────
-        if npad < 0:
-            print(f"[ERROR] npad < 0: n_sources={self.n_sources}, fg_events={len(output['fg_events'])}", flush=True)
-        # ── END DEBUG ──────────────────────────────────────────────────
-        
         if npad > 0: 
             label.extend(['silence'] * npad)
             for _ in range(npad):
@@ -279,17 +266,12 @@ class DatasetS3(torch.utils.data.Dataset):
                     'waveform_dry': np.zeros((1, mixture.shape[-1]), dtype=mixture.dtype)
                 })
         
-        # ── DEBUG ──────────────────────────────────────────────────────
-        if len(label) != self.n_sources or len(output['fg_events']) != self.n_sources:
-            print(f"[ERROR] final length mismatch: label={len(label)}, fg_events={len(output['fg_events'])}, n_sources={self.n_sources}", flush=True)
-        
-        # 检查 fake label 的 waveform 是否为零
-        for i, fge in enumerate(output['fg_events']):
-            if fge['metadata']['label'] not in label[:i] + label[i+1:]:  # 这个 label 只出现一次
+        # 验证 fake label 的完整性
+        for fge in output['fg_events']:
+            if fge['metadata'].get('is_fake', False):
                 power = np.mean(fge['waveform_dry'] ** 2)
                 if power > 1e-10:
-                    print(f"[WARNING] unique label '{fge['metadata']['label']}' has non-zero waveform (power={power:.6f})", flush=True)
-        # ── END DEBUG ──────────────────────────────────────────────────
+                    print(f"[ERROR] fake label '{fge['metadata']['label']}' has non-zero waveform (power={power:.6f})", flush=True)
         
         return_obj = {
             'mixture': torch.from_numpy(mixture).to(torch.float32),
@@ -306,8 +288,6 @@ class DatasetS3(torch.utils.data.Dataset):
             return_obj['metadata'] = output
     
         return return_obj
-
-
 
 
     def _get_item_generate(self, idx):
