@@ -51,7 +51,7 @@ datamodule:
                     label_vector_mode: concat
                     silence_label_mode: zeros
                     return_meta: false
-                    fake_label_prob: 0.05  #new
+                    fake_label_prob: 0.3  #new
         val_dataloader:
             batch_size: 4
             num_workers: 4
